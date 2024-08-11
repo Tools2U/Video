@@ -10,13 +10,13 @@ import yaml
 from shortGPT.config.api_db import ApiKeyManager
 
 
-def num_tokens_from_messages(texts, model="gpt-4-turbo-2024-04-09"):
+def num_tokens_from_messages(texts, model="gpt-4o-mini"):
     """Returns the number of tokens used by a list of messages."""
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
         encoding = tiktoken.get_encoding("cl100k_base")
-    if model == "gpt-4-turbo-2024-04-09":  # note: future models may deviate from this
+    if model == "gpt-4o-mini":  # note: future models may deviate from this
         if isinstance(texts, str):
             texts = [texts]
         score = 0
@@ -69,7 +69,7 @@ def open_file(filepath):
         return infile.read()
 
 
-def gpt3Turbo_completion(chat_prompt="", system="You are an AI that can give the answer to anything", temp=0.7, model="gpt-4-turbo-2024-04-09", max_tokens=65536, remove_nl=True, conversation=None):
+def gpt3Turbo_completion(chat_prompt="", system="You are an AI that can give the answer to anything", temp=0.7, model="gpt-4-turbo", max_tokens=16384, remove_nl=True, conversation=None):
     openai.api_key = ApiKeyManager.get_api_key("OPENAI")
     max_retry = 5
     retry = 0
