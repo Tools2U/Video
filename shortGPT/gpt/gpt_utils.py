@@ -69,7 +69,7 @@ def open_file(filepath):
         return infile.read()
 
 
-def gpt3Turbo_completion(chat_prompt="", system="You are an AI that can give the answer to anything", temp=0.7, model="gpt-4-turbo", max_tokens=16384, remove_nl=True, conversation=None):
+def gpt3Turbo_completion(chat_prompt="", system="You are an AI that can give the answer to anything", temp=0.7, model="gpt-4-turbo", max_tokens=4096, remove_nl=True, conversation=None):
     openai.api_key = ApiKeyManager.get_api_key("OPENAI")
     max_retry = 5
     retry = 0
