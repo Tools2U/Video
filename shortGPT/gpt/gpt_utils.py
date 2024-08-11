@@ -10,13 +10,13 @@ import yaml
 from shortGPT.config.api_db import ApiKeyManager
 
 
-def num_tokens_from_messages(texts, model="gpt-4-turbo-2024-04-09"):
+def num_tokens_from_messages(texts, model="gpt-3.5-turbo-0301"):
     """Returns the number of tokens used by a list of messages."""
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
         encoding = tiktoken.get_encoding("cl100k_base")
-    if model == "gpt-4-turbo-2024-04-09":  # note: future models may deviate from this
+    if model == "gpt-3.5-turbo-03019":  # note: future models may deviate from this
         if isinstance(texts, str):
             texts = [texts]
         score = 0
