@@ -135,7 +135,9 @@ class ContentVideoEngine(AbstractContentEngine):
                                                           'set_time_start': t1,
                                                           'set_time_end': t2})
 
+            self.logger("Rendering video...")
             videoEditor.renderVideo(outputPath, logger=self.logger if self.logger is not self.default_logger else None)
+            self.logger("Video rendering completed.")
 
         self._db_video_path = outputPath
 
@@ -156,4 +158,3 @@ class ContentVideoEngine(AbstractContentEngine):
         self._db_video_path = newFileName+".mp4"
         self._db_ready_to_upload = True
         self.logger(f"Video rendered and metadata saved at {newFileName}.mp4")
-
