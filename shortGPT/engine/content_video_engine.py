@@ -94,7 +94,14 @@ class ContentVideoEngine(AbstractContentEngine):
 
             for query in self._db_timed_video_searches[0][1]:  # Only use the predefined search terms
                 logging.info(f"Searching for video with query: {query}")
-                url, video_duration = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
+                result = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
+                
+                if len(result) == 2:
+                    url, video_duration = result
+                else:
+                    logging.error("Unexpected result format from getBestVideo")
+                    continue
+
                 if url:
                     video_start_time = current_time  # Start at the current cumulative time
                     video_end_time = video_start_time + video_duration  # Calculate the end time
@@ -186,4 +193,3 @@ class ContentVideoEngine(AbstractContentEngine):
         self._db_ready_to_upload = True
         self.logger(f"Video rendered and metadata saved at {newFileName}.mp4")
         logging.info(f"Metadata saved at {newFileName}.txt")
-
