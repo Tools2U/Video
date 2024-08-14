@@ -14,7 +14,8 @@ from shortGPT.config.languages import Language
 from shortGPT.editing_framework.editing_engine import (EditingEngine, EditingStep)
 from shortGPT.editing_utils import captions
 from shortGPT.engine.abstract_content_engine import AbstractContentEngine
-from shortGPT.gpt import gpt_translate, gpt_yt
+from shortGPT.gpt import gpt_editing, gpt_translate, gpt_yt
+
 
 class ContentVideoEngine(AbstractContentEngine):
 
@@ -47,29 +48,32 @@ class ContentVideoEngine(AbstractContentEngine):
         if not self._db_script:
             raise NotImplementedError("generateScript method must set self._db_script.")
         if self._db_temp_audio_path:
+            logging.info("Temporary audio already generated.")
             return
         self.verifyParameters(text=self._db_script)
         script = self._db_script
         if self._db_language != Language.ENGLISH.value:
-            logging.info("Translating script...")
+            logging.info(f"Translating script to {self._db_language}")
             self._db_translated_script = gpt_translate.translateContent(script, self._db_language)
             script = self._db_translated_script
         self._db_temp_audio_path = self.voiceModule.generate_voice(
             script, self.dynamicAssetDir + "temp_audio_path.wav")
-        logging.info(f"Generated temporary audio at {self._db_temp_audio_path}")
+        logging.info(f"Temporary audio generated at {self._db_temp_audio_path}")
 
     def _speedUpAudio(self):
         logging.info("Starting _speedUpAudio step...")
         if self._db_audio_path:
+            logging.info("Audio path already exists.")
             return
         self.verifyParameters(tempAudioPath=self._db_temp_audio_path)
         self._db_audio_path = self._db_temp_audio_path
-        logging.info(f"Audio path set to {self._db_audio_path}")
+        logging.info(f"Audio speed-up completed. Audio path: {self._db_audio_path}")
 
     def _timeCaptions(self):
         logging.info("Starting _timeCaptions step...")
         self.verifyParameters(audioPath=self._db_audio_path)
         whisper_analysis = audio_utils.audioToText(self._db_audio_path)
+        logging.info(f"Audio analyzed for captions: {whisper_analysis}")
         max_len = 15
         if not self._db_format_vertical:
             max_len = 30
@@ -80,6 +84,7 @@ class ContentVideoEngine(AbstractContentEngine):
     def _generateVideoSearchTerms(self):
         logging.info("Starting _generateVideoSearchTerms step...")
         self.verifyParameters(captionsTimed=self._db_timed_captions)
+        # Add more complex search terms logic if necessary
         self._db_timed_video_searches = [
             [[0, 9999], ["nature landscape", "nature landscape", "nature landscape"]]
         ]
@@ -95,11 +100,14 @@ class ContentVideoEngine(AbstractContentEngine):
             for query in self._db_timed_video_searches[0][1]:  # Only use the predefined search terms
                 logging.info(f"Searching for video with query: {query}")
                 result = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
-                
-                if len(result) == 2:
+
+                # Log the raw result to understand its structure
+                logging.info(f"Raw result from getBestVideo: {result}")
+
+                if isinstance(result, tuple) and len(result) == 2:
                     url, video_duration = result
                 else:
-                    logging.error("Unexpected result format from getBestVideo")
+                    logging.error(f"Unexpected result format from getBestVideo: {result}")
                     continue
 
                 if url:
@@ -121,7 +129,7 @@ class ContentVideoEngine(AbstractContentEngine):
         logging.info("Starting _chooseBackgroundMusic step...")
         if self._db_background_music_name:
             self._db_background_music_url = AssetDatabase.get_asset_link(self._db_background_music_name)
-            logging.info(f"Background music selected: {self._db_background_music_url}")
+            logging.info(f"Background music chosen: {self._db_background_music_name} with URL {self._db_background_music_url}")
 
     def _prepareBackgroundAssets(self):
         logging.info("Starting _prepareBackgroundAssets step...")
@@ -130,7 +138,7 @@ class ContentVideoEngine(AbstractContentEngine):
             self.logger("Rendering short: (1/4) preparing voice asset...")
             self._db_audio_path, self._db_voiceover_duration = get_asset_duration(
                 self._db_audio_path, isVideo=False)
-            logging.info(f"Voiceover duration: {self._db_voiceover_duration}")
+            logging.info(f"Voiceover asset prepared with duration: {self._db_voiceover_duration}")
 
     def _prepareCustomAssets(self):
         logging.info("Starting _prepareCustomAssets step...")
@@ -139,8 +147,7 @@ class ContentVideoEngine(AbstractContentEngine):
 
     def _editAndRenderShort(self):
         logging.info("Starting _editAndRenderShort step...")
-        self.verifyParameters(
-            voiceover_audio_url=self._db_audio_path)
+        self.verifyParameters(voiceover_audio_url=self._db_audio_path)
 
         outputPath = self.dynamicAssetDir+"rendered_video.mp4"
         if not (os.path.exists(outputPath)):
@@ -166,19 +173,22 @@ class ContentVideoEngine(AbstractContentEngine):
                                                           'set_time_start': t1,
                                                           'set_time_end': t2})
 
-            self.logger("Rendering video...")
+            logging.info("Rendering video...")
             videoEditor.renderVideo(outputPath, logger=self.logger if self.logger is not self.default_logger else None)
-            self.logger("Video rendering completed.")
-            logging.info(f"Video rendered to {outputPath}")
+            logging.info("Video rendering completed.")
 
         self._db_video_path = outputPath
+        logging.info(f"Video path set to: {self._db_video_path}")
 
     def _addMetadata(self):
         logging.info("Starting _addMetadata step...")
         if not os.path.exists('videos/'):
             os.makedirs('videos')
+            logging.info("Created 'videos' directory.")
+
         self._db_yt_title, self._db_yt_description = gpt_yt.generate_title_description_dict(self._db_script)
-        logging.info(f"Generated YouTube title and description: {self._db_yt_title}, {self._db_yt_description}")
+        logging.info(f"Generated YouTube title: {self._db_yt_title}")
+        logging.info(f"Generated YouTube description: {self._db_yt_description}")
 
         now = datetime.datetime.now()
         date_str = now.strftime("%Y-%m-%d_%H-%M-%S")
@@ -186,10 +196,14 @@ class ContentVideoEngine(AbstractContentEngine):
             re.sub(r"[^a-zA-Z0-9 '\n\.]", '', self._db_yt_title)
 
         shutil.move(self._db_video_path, newFileName+".mp4")
+        logging.info(f"Video moved to: {newFileName}.mp4")
+
         with open(newFileName+".txt", "w", encoding="utf-8") as f:
             f.write(
                 f"---Youtube title---\n{self._db_yt_title}\n---Youtube description---\n{self._db_yt_description}")
+        logging.info(f"Metadata saved to: {newFileName}.txt")
+
         self._db_video_path = newFileName+".mp4"
         self._db_ready_to_upload = True
         self.logger(f"Video rendered and metadata saved at {newFileName}.mp4")
-        logging.info(f"Metadata saved at {newFileName}.txt")
+        logging.info(f"Video is ready to upload: {self._db_ready_to_upload}")
