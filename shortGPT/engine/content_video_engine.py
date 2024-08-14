@@ -1,159 +1,162 @@
-import gradio as gr
-import logging
+import datetime
 import os
-from shortGPT.engine.content_video_engine import ContentVideoEngine
+import re
+import shutil
+import cv2
+
+from shortGPT.api_utils.pexels_api import getBestVideo
+from shortGPT.audio import audio_utils
+from shortGPT.audio.audio_duration import get_asset_duration
 from shortGPT.audio.voice_module import VoiceModule
+from shortGPT.config.asset_db import AssetDatabase
 from shortGPT.config.languages import Language
+from shortGPT.editing_framework.editing_engine import (EditingEngine, EditingStep)
+from shortGPT.editing_utils import captions
+from shortGPT.engine.abstract_content_engine import AbstractContentEngine
+from shortGPT.gpt import gpt_translate, gpt_yt
 
-class VideoAutomationUI:
-    def __init__(self):
-        # Initialize necessary variables and components
-        self.script = ""
-        self.voice_module = VoiceModule()
-        self.isVertical = False
-        self.language = Language.ENGLISH
-        self.progress = None  # Placeholder for progress tracking
-        # Set up logging
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(__name__)
 
-    def make_video(self, script, voice_module, is_vertical, progress=None):
-        """
-        Function to generate the video using ContentVideoEngine.
-        """
-        try:
-            video_engine = ContentVideoEngine(
-                voiceModule=voice_module,
-                script=script,
-                isVerticalFormat=is_vertical,
-                language=self.language
-            )
+class ContentVideoEngine(AbstractContentEngine):
 
-            # Iterate through the content creation steps
-            for step_num, step_info in video_engine.makeContent():
-                if progress:
-                    progress((step_num + 1) / len(video_engine.stepDict), f"Executing step {step_num + 1}: {step_info}")
-                self.logger.info(f"Completed step {step_num + 1}: {step_info}")
+    def __init__(self, voiceModule: VoiceModule, script: str, background_music_name="", id="",
+                 watermark=None, isVerticalFormat=False, language: Language = Language.ENGLISH):
+        super().__init__(id, "general_video", language, voiceModule)
+        if not id:
+            if watermark:
+                self._db_watermark = watermark
+            if background_music_name:
+                self._db_background_music_name = background_music_name
+            self._db_script = script
+            self._db_format_vertical = isVerticalFormat
 
-            # After content creation, retrieve the video path
-            video_path = video_engine._db_video_path
-            return video_path
+        self.stepDict = {
+            1: self._generateTempAudio,
+            2: self._speedUpAudio,
+            3: self._timeCaptions,
+            4: self._generateVideoSearchTerms,
+            5: self._generateVideoUrls,
+            6: self._chooseBackgroundMusic,
+            7: self._prepareBackgroundAssets,
+            8: self._prepareCustomAssets,
+            9: self._editAndRenderShort,
+            10: self._addMetadata
+        }
 
-        except Exception as e:
-            self.logger.error(f"Error during video generation: {str(e)}")
-            raise e
+    def _generateTempAudio(self):
+        if not self._db_script:
+            raise NotImplementedError("generateScript method must set self._db_script.")
+        if self._db_temp_audio_path:
+            return
+        self.verifyParameters(text=self._db_script)
+        script = self._db_script
+        if self._db_language != Language.ENGLISH.value:
+            self._db_translated_script = gpt_translate.translateContent(script, self._db_language)
+            script = self._db_translated_script
+        self._db_temp_audio_path = self.voiceModule.generate_voice(
+            script, self.dynamicAssetDir + "temp_audio_path.wav")
 
-    def respond(self, user_input, chatbot_history, is_vertical, progress=gr.Progress()):
-        """
-        Gradio event handler for user interactions.
-        """
-        # Update internal state based on user input
-        self.script = user_input
-        self.isVertical = is_vertical
+    def _speedUpAudio(self):
+        if self._db_audio_path:
+            return
+        self.verifyParameters(tempAudioPath=self._db_temp_audio_path)
+        self._db_audio_path = self._db_temp_audio_path
 
-        # Provide initial feedback to the user
-        chatbot_history.append((user_input, "Processing your request..."))
-        yield (
-            gr.Textbox.update(value=""),
-            gr.Chatbot.update(value=chatbot_history),
-            gr.HTML.update(value=""),
-            gr.HTML.update(value=""),
-            gr.Button.update(visible=False),
-            gr.Button.update(visible=False),
-        )
+    def _timeCaptions(self):
+        self.verifyParameters(audioPath=self._db_audio_path)
+        whisper_analysis = audio_utils.audioToText(self._db_audio_path)
+        max_len = 15
+        if not self._db_format_vertical:
+            max_len = 30
+        self._db_timed_captions = captions.getCaptionsWithTime(
+            whisper_analysis, maxCaptionSize=max_len)
 
-        try:
-            # Generate the video
-            video_path = self.make_video(self.script, self.voice_module, self.isVertical, progress=progress)
+    def _generateVideoSearchTerms(self):
+        self.verifyParameters(captionsTimed=self._db_timed_captions)
+        self._db_timed_video_searches = [
+            [[0, 9999], ["nature landscape", "nature landscape", "nature landscape"]]
+        ]
 
-            # Provide download link and success message
-            if os.path.exists(video_path):
-                video_filename = os.path.basename(video_path)
-                download_link = f"<a href='file/{video_filename}' download>Download Your Video</a>"
-                chatbot_history.append((None, "Your video is ready! 🎉"))
-                yield (
-                    gr.Textbox.update(visible=False),
-                    gr.Chatbot.update(value=chatbot_history),
-                    gr.HTML.update(value=download_link, visible=True),
-                    gr.HTML.update(value="", visible=False),
-                    gr.Button.update(visible=True),
-                    gr.Button.update(visible=True),
-                )
+    def _generateVideoUrls(self):
+        logging.info("Starting _generateVideoUrls step...")
+        timed_video_urls = []
+        used_links = []
+        current_time = 0  # Track the cumulative time to set proper start times
+
+        for query in self._db_timed_video_searches[0][1]:  # Only use the predefined search terms
+            url, video_duration = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
+            if url:
+                video_start_time = current_time  # Start at the current cumulative time
+                video_end_time = video_start_time + video_duration  # Calculate the end time
+                used_links.append(url.split('.hd')[0])
+                timed_video_urls.append([[video_start_time, video_end_time], url])
+                current_time = video_end_time  # Update current time to the end of this video
+
+        self._db_timed_video_urls = timed_video_urls
+        logging.info(f"Generated video URLs: {timed_video_urls}")
+
+    def _chooseBackgroundMusic(self):
+        if self._db_background_music_name:
+            self._db_background_music_url = AssetDatabase.get_asset_link(self._db_background_music_name)
+
+    def _prepareBackgroundAssets(self):
+        self.verifyParameters(voiceover_audio_url=self._db_audio_path)
+        if not self._db_voiceover_duration:
+            self.logger("Rendering short: (1/4) preparing voice asset...")
+            self._db_audio_path, self._db_voiceover_duration = get_asset_duration(
+                self._db_audio_path, isVideo=False)
+
+    def _prepareCustomAssets(self):
+        self.logger("Rendering short: (3/4) preparing custom assets...")
+        pass
+
+    def _editAndRenderShort(self):
+        self.verifyParameters(
+            voiceover_audio_url=self._db_audio_path)
+
+        outputPath = self.dynamicAssetDir+"rendered_video.mp4"
+        if not (os.path.exists(outputPath)):
+            self.logger("Rendering short: Starting automated editing...")
+            videoEditor = EditingEngine()
+            videoEditor.addEditingStep(EditingStep.ADD_VOICEOVER_AUDIO, {
+                                       'url': self._db_audio_path})
+            if (self._db_background_music_url):
+                videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_MUSIC, {'url': self._db_background_music_url,
+                                                                              'loop_background_music': self._db_voiceover_duration,
+                                                                              "volume_percentage": 0.08})
+            for (t1, t2), video_url in self._db_timed_video_urls:
+                videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_VIDEO, {'url': video_url,
+                                                                              'set_time_start': t1,
+                                                                              'set_time_end': t2})
+            if (self._db_format_vertical):
+                caption_type = EditingStep.ADD_CAPTION_SHORT_ARABIC if self._db_language == Language.ARABIC.value else EditingStep.ADD_CAPTION_SHORT
             else:
-                # Handle the case where video_path does not exist
-                chatbot_history.append((None, "An error occurred: Video file not found."))
-                yield (
-                    gr.Textbox.update(visible=False),
-                    gr.Chatbot.update(value=chatbot_history),
-                    gr.HTML.update(visible=False),
-                    gr.HTML.update(visible=False),
-                    gr.Button.update(visible=True),
-                    gr.Button.update(visible=True),
-                )
+                caption_type = EditingStep.ADD_CAPTION_LANDSCAPE_ARABIC if self._db_language == Language.ARABIC.value else EditingStep.ADD_CAPTION_LANDSCAPE
 
-        except Exception as e:
-            # Handle exceptions and provide error feedback
-            error_message = f"An error occurred during video generation: {str(e)}"
-            self.logger.error(error_message)
-            chatbot_history.append((None, error_message))
-            yield (
-                gr.Textbox.update(visible=False),
-                gr.Chatbot.update(value=chatbot_history),
-                gr.HTML.update(visible=False),
-                gr.HTML.update(visible=False),
-                gr.Button.update(visible=True),
-                gr.Button.update(visible=True),
-            )
+            for (t1, t2), text in self._db_timed_captions:
+                videoEditor.addEditingStep(caption_type, {'text': text.upper(),
+                                                          'set_time_start': t1,
+                                                          'set_time_end': t2})
 
-    def launch_interface(self):
-        """
-        Function to set up and launch the Gradio interface.
-        """
-        with gr.Blocks() as demo:
-            gr.Markdown("# 🎬 Video Automation Interface")
+            self.logger("Rendering video...")
+            videoEditor.renderVideo(outputPath, logger=self.logger if self.logger is not self.default_logger else None)
+            self.logger("Video rendering completed.")
 
-            with gr.Row():
-                user_input = gr.Textbox(
-                    label="Enter your script",
-                    placeholder="Type your script here...",
-                    lines=5
-                )
-                is_vertical = gr.Checkbox(
-                    label="Vertical Video Format",
-                    value=False
-                )
+        self._db_video_path = outputPath
 
-            chatbot = gr.Chatbot()
+    def _addMetadata(self):
+        if not os.path.exists('videos/'):
+            os.makedirs('videos')
+        self._db_yt_title, self._db_yt_description = gpt_yt.generate_title_description_dict(self._db_script)
 
-            with gr.Row():
-                submit_btn = gr.Button("Generate Video")
-                clear_btn = gr.Button("Clear Chat")
+        now = datetime.datetime.now()
+        date_str = now.strftime("%Y-%m-%d_%H-%M-%S")
+        newFileName = f"videos/{date_str} - " + \
+            re.sub(r"[^a-zA-Z0-9 '\n\.]", '', self._db_yt_title)
 
-            download_link = gr.HTML(visible=False)
-            error_message = gr.HTML(visible=False)
-
-            # Set up event handlers
-            submit_btn.click(
-                self.respond,
-                inputs=[user_input, chatbot, is_vertical],
-                outputs=[user_input, chatbot, download_link, error_message, submit_btn, clear_btn],
-            )
-
-            clear_btn.click(
-                lambda: (
-                    gr.Textbox.update(value=""),
-                    gr.Chatbot.update(value=[]),
-                    gr.HTML.update(value="", visible=False),
-                    gr.HTML.update(value="", visible=False),
-                    gr.Button.update(visible=True),
-                    gr.Button.update(visible=True),
-                ),
-                outputs=[user_input, chatbot, download_link, error_message, submit_btn, clear_btn],
-            )
-
-        demo.launch()
-
-# Initialize and launch the interface
-if __name__ == "__main__":
-    video_ui = VideoAutomationUI()
-    video_ui.launch_interface()
+        shutil.move(self._db_video_path, newFileName+".mp4")
+        with open(newFileName+".txt", "w", encoding="utf-8") as f:
+            f.write(
+                f"---Youtube title---\n{self._db_yt_title}\n---Youtube description---\n{self._db_yt_description}")
+        self._db_video_path = newFileName+".mp4"
+        self._db_ready_to_upload = True
+        self.logger(f"Video rendered and metadata saved at {newFileName}.mp4")
