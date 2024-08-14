@@ -77,6 +77,7 @@ class ContentVideoEngine(AbstractContentEngine):
         ]
 
     def _generateVideoUrls(self):
+        logging.info("Starting _generateVideoUrls step...")
         timed_video_urls = []
         used_links = []
         current_time = 0  # Track the cumulative time to set proper start times
@@ -91,6 +92,7 @@ class ContentVideoEngine(AbstractContentEngine):
                 current_time = video_end_time  # Update current time to the end of this video
 
         self._db_timed_video_urls = timed_video_urls
+        logging.info("Video URLs generation completed.")
 
     def _chooseBackgroundMusic(self):
         if self._db_background_music_name:
@@ -142,19 +144,19 @@ class ContentVideoEngine(AbstractContentEngine):
         self._db_video_path = outputPath
 
     def _addMetadata(self):
+        logging.info("Starting _addMetadata step...")
         if not os.path.exists('videos/'):
             os.makedirs('videos')
         self._db_yt_title, self._db_yt_description = gpt_yt.generate_title_description_dict(self._db_script)
 
         now = datetime.datetime.now()
         date_str = now.strftime("%Y-%m-%d_%H-%M-%S")
-        newFileName = f"videos/{date_str} - " + \
-            re.sub(r"[^a-zA-Z0-9 '\n\.]", '', self._db_yt_title)
+        newFileName = f"videos/{date_str} - " + re.sub(r"[^a-zA-Z0-9 '\\n\\.]", '', self._db_yt_title)
 
-        shutil.move(self._db_video_path, newFileName+".mp4")
-        with open(newFileName+".txt", "w", encoding="utf-8") as f:
-            f.write(
-                f"---Youtube title---\n{self._db_yt_title}\n---Youtube description---\n{self._db_yt_description}")
-        self._db_video_path = newFileName+".mp4"
-        self._db_ready_to_upload = True
-        self.logger(f"Video rendered and metadata saved at {newFileName}.mp4")
+        shutil.move(self._db_video_path, newFileName + ".mp4")
+        with open(newFileName + ".txt", "w", encoding="utf-8") as f:
+            f.write(f"---Youtube title---\\n{self._db_yt_title}\\n---Youtube description---\\n{self._db_yt_description}")
+        
+        self._db_video_path = newFileName + ".mp4"
+        self._db_ready_to_upload = True  # This line is crucial for subsequent steps
+        logging.info(f"Metadata added and video moved to: {newFileName}.mp4")
