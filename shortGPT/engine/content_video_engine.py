@@ -87,20 +87,18 @@ class ContentVideoEngine(AbstractContentEngine):
 
     def _generateVideoUrls(self):
         logging.info("Starting _generateVideoUrls step...")
+        timed_video_searches = self._db_timed_video_searches
+        self.verifyParameters(captionsTimed=timed_video_searches)
         timed_video_urls = []
         used_links = []
-        current_time = 0  # Track the cumulative time to set proper start times
-
-        for query in self._db_timed_video_searches[0][1]:  # Only use the predefined search terms
-            url, video_duration = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
-            if url and video_duration:
-                video_start_time = current_time  # Start at the current cumulative time
-                video_end_time = video_start_time + video_duration  # Calculate the end time
-                used_links.append(url.split('.hd')[0])
-                timed_video_urls.append([[video_start_time, video_end_time], url])
-                current_time = video_end_time  # Update current time to the end of this video
-                logging.info(f"Video URL {url} added from {video_start_time} to {video_end_time}.")
-
+        for (t1, t2), search_terms in timed_video_searches:
+            url = ""
+            for query in reversed(search_terms):
+                url = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
+                if url:
+                    used_links.append(url.split('.hd')[0])
+                    break
+            timed_video_urls.append([[t1, t2], url])
         self._db_timed_video_urls = timed_video_urls
         logging.info("Video URLs generation completed.")
 
