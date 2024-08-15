@@ -87,6 +87,10 @@ class ContentVideoEngine(AbstractContentEngine):
         used_links = []
         current_time = 0  # Track the cumulative time to set proper start times
 
+        # Ensure that the voiceover duration is calculated
+        if not self._db_voiceover_duration:
+            self._prepareBackgroundAssets()
+
         while current_time < self._db_voiceover_duration:
             for query in self._db_timed_video_searches[0][1]:
                 result = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
