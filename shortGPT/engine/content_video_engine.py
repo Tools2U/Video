@@ -3,6 +3,8 @@ import os
 import re
 import shutil
 import cv2
+import logging
+
 from shortGPT.api_utils.pexels_api import getBestVideo
 from shortGPT.audio import audio_utils
 from shortGPT.audio.audio_duration import get_asset_duration
@@ -13,7 +15,6 @@ from shortGPT.editing_framework.editing_engine import (EditingEngine, EditingSte
 from shortGPT.editing_utils import captions
 from shortGPT.engine.abstract_content_engine import AbstractContentEngine
 from shortGPT.gpt import gpt_editing, gpt_translate, gpt_yt
-from shortGPT.api_utils.openai_api import OpenAIAPI  # Ensure OpenAIAPI is imported
 
 
 class ContentVideoEngine(AbstractContentEngine):
@@ -29,8 +30,6 @@ class ContentVideoEngine(AbstractContentEngine):
             self._db_script = script
             self._db_format_vertical = isVerticalFormat
 
-        self.openai_api = OpenAIAPI()  # Initialize the OpenAIAPI class
-
         self.stepDict = {
             1: self._generateTempAudio,
             2: self._speedUpAudio,
@@ -39,9 +38,9 @@ class ContentVideoEngine(AbstractContentEngine):
             5: self._generateVideoUrls,
             6: self._chooseBackgroundMusic,
             7: self._prepareBackgroundAssets,
-            8: self._prepareCustomAssets,  # Updated to include chapter detection
+            8: self._prepareCustomAssets,
             9: self._editAndRenderShort,
-            10: self._addMetadata,
+            10: self._addMetadata
         }
 
     def _generateTempAudio(self):
@@ -82,21 +81,51 @@ class ContentVideoEngine(AbstractContentEngine):
         timed_video_urls = []
         used_links = []
         current_time = 0  # Track the cumulative time to set proper start times
+        max_attempts = 10
 
-        while current_time < self._db_voiceover_duration:  # Loop until the total duration covers the voiceover duration
-            for query in self._db_timed_video_searches[0][1]:  # Only use the predefined search terms
-                video_info = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
-                if video_info:
-                    url, video_duration = video_info
-                    video_start_time = current_time  # Start at the current cumulative time
-                    video_end_time = video_start_time + video_duration  # Calculate the end time
-                    used_links.append(url.split('.hd')[0])
-                    timed_video_urls.append([[video_start_time, video_end_time], url])
-                    current_time = video_end_time  # Update current time to the end of this video
-                    if current_time >= self._db_voiceover_duration:
-                        break  # Stop if we have enough video to cover the voiceover
+        if not self._db_voiceover_duration:
+            raise ValueError("Voiceover duration is not set. Ensure that _prepareBackgroundAssets is called before _generateVideoUrls.")
+
+        logging.info(f"Starting video URL generation. Voiceover duration: {self._db_voiceover_duration}s")
+
+        try:
+            while current_time < self._db_voiceover_duration:  # Loop until the total duration covers the voiceover duration
+                logging.info(f"Current accumulated video time: {current_time}s. Looking for more clips.")
+                for query in self._db_timed_video_searches[0][1]:  # Only use the predefined search terms
+                    attempt = 0
+                    while attempt < max_attempts:
+                        logging.info(f"Attempting to fetch video for query: {query}. Attempt {attempt + 1}/{max_attempts}.")
+                        result = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
+                        if result and len(result) == 2:
+                            url, video_duration = result
+                            video_start_time = current_time  # Start at the current cumulative time
+                            video_end_time = video_start_time + video_duration  # Calculate the end time
+                            used_links.append(url.split('.hd')[0])
+                            timed_video_urls.append([[video_start_time, video_end_time], url])
+                            current_time = video_end_time  # Update current time to the end of this video
+                            logging.info(f"Added video: {url} from {video_start_time}s to {video_end_time}s.")
+                            break
+                        else:
+                            attempt += 1
+                            logging.warning(f"Attempt {attempt}/{max_attempts} failed to get video. Retrying...")
+
+                    if attempt >= max_attempts:
+                        logging.error("Max attempts reached. Could not find enough video clips.")
+                        break
+
+                if current_time >= self._db_voiceover_duration:
+                    logging.info(f"Successfully gathered video clips for the entire duration: {self._db_voiceover_duration}s.")
+                    break
+
+            if current_time < self._db_voiceover_duration:
+                logging.warning(f"Not enough video clips found. Final video will only cover {current_time}/{self._db_voiceover_duration}s.")
+
+        except Exception as e:
+            logging.error(f"Error during video URL generation: {str(e)}")
+            raise
 
         self._db_timed_video_urls = timed_video_urls
+        logging.info("Finished generating video URLs.")
 
     def _chooseBackgroundMusic(self):
         if self._db_background_music_name:
@@ -111,10 +140,7 @@ class ContentVideoEngine(AbstractContentEngine):
 
     def _prepareCustomAssets(self):
         self.logger("Rendering short: (3/4) preparing custom assets...")
-
-        # Detecting and preparing chapter titles using OpenAI
-        self._db_chapter_titles = self.openai_api.get_chapters(self._db_script)
-        self.logger(f"Detected chapter titles: {self._db_chapter_titles}")
+        pass
 
     def _editAndRenderShort(self):
         self.verifyParameters(
@@ -144,15 +170,8 @@ class ContentVideoEngine(AbstractContentEngine):
                                                           'set_time_start': t1,
                                                           'set_time_end': t2})
 
-            # Adding chapter titles
-            if self._db_chapter_titles:
-                for (timestamp, title) in self._db_chapter_titles:
-                    videoEditor.addEditingStep(caption_type, {'text': title.upper(),
-                                                              'set_time_start': timestamp,
-                                                              'set_time_end': timestamp + 2})  # Display chapter title for 2 seconds
-
             self.logger("Rendering video...")
-            videoEditor.renderVideo(outputPath, logger=self.logger if self.logger is not self.default_logger else None)
+            videoEditor.renderVideo(outputPath, logger=self.logger if self.logger is not the default_logger else None)
             self.logger("Video rendering completed.")
 
         self._db_video_path = outputPath
