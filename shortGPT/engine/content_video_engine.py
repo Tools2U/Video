@@ -2,8 +2,7 @@ import datetime
 import os
 import re
 import shutil
-import logging
-
+import cv2
 from shortGPT.api_utils.pexels_api import getBestVideo
 from shortGPT.audio import audio_utils
 from shortGPT.audio.audio_duration import get_asset_duration
@@ -13,8 +12,8 @@ from shortGPT.config.languages import Language
 from shortGPT.editing_framework.editing_engine import (EditingEngine, EditingStep)
 from shortGPT.editing_utils import captions
 from shortGPT.engine.abstract_content_engine import AbstractContentEngine
-from shortGPT.gpt import gpt_translate, gpt_yt
-from shortGPT.api_utils.openai_api import OpenAIAPI
+from shortGPT.gpt import gpt_editing, gpt_translate, gpt_yt
+from shortGPT.api_utils.openai_api import OpenAIAPI  # Import the OpenAI API class
 
 class ContentVideoEngine(AbstractContentEngine):
 
@@ -29,8 +28,7 @@ class ContentVideoEngine(AbstractContentEngine):
             self._db_script = script
             self._db_format_vertical = isVerticalFormat
 
-        self._db_chapter_titles = []  # To store the chapters and their timings
-        self.openai_api = OpenAIAPI(api_key="your_openai_api_key")  # Centralized API key management
+        self.openai_api = OpenAIAPI()  # Initialize the OpenAIAPI class
 
         self.stepDict = {
             1: self._generateTempAudio,
@@ -40,9 +38,9 @@ class ContentVideoEngine(AbstractContentEngine):
             5: self._generateVideoUrls,
             6: self._chooseBackgroundMusic,
             7: self._prepareBackgroundAssets,
-            8: self._prepareCustomAssets,
+            8: self._prepareCustomAssets,  # Updated to include chapter detection
             9: self._editAndRenderShort,
-            10: self._addMetadata
+            10: self._addMetadata,
         }
 
     def _generateTempAudio(self):
@@ -84,7 +82,7 @@ class ContentVideoEngine(AbstractContentEngine):
         used_links = []
         current_time = 0  # Track the cumulative time to set proper start times
 
-        while current_time < self._db_voiceover_duration:
+        while current_time < self._db_voiceover_duration:  # Loop until the total duration covers the voiceover duration
             for query in self._db_timed_video_searches[0][1]:  # Only use the predefined search terms
                 url, video_duration = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
                 if url:
@@ -94,7 +92,7 @@ class ContentVideoEngine(AbstractContentEngine):
                     timed_video_urls.append([[video_start_time, video_end_time], url])
                     current_time = video_end_time  # Update current time to the end of this video
                     if current_time >= self._db_voiceover_duration:
-                        break
+                        break  # Stop if we have enough video to cover the voiceover
 
         self._db_timed_video_urls = timed_video_urls
 
@@ -111,76 +109,45 @@ class ContentVideoEngine(AbstractContentEngine):
 
     def _prepareCustomAssets(self):
         self.logger("Rendering short: (3/4) preparing custom assets...")
-        pass
 
-    def _identifyChapters(self):
-        """ Identify chapters in the script and match them with the voiceover timings. """
-        prompt = f"""
-        Help me detect new chapters in this YouTube script. The script will be for a YouTube video. 
-        Find starting points or prominent important words like the start of a new chapter in explaining, 
-        such as Introduction, Details, Conclusion, etc.:
-        {self._db_script}
-        """
-
-        response = self.openai_api.complete(
-            prompt=prompt,
-            max_tokens=2048,  # Adjusted to handle longer scripts
-            temperature=0.5,
-            model="text-davinci-003"
-        )
-
-        chapters = response['choices'][0]['text'].strip().split('\n')
-        chapters = [chapter for chapter in chapters if chapter]
-
-        whisper_analysis = audio_utils.audioToText(self._db_audio_path)
-        self._db_chapter_titles = self.match_chapters_with_timings(chapters, whisper_analysis['segments'])
-
-    def match_chapters_with_timings(self, chapters, timings):
-        matched_chapters = []
-
-        for chapter in chapters:
-            for segment in timings:
-                if chapter.lower() in segment['text'].lower():
-                    matched_chapters.append(((segment['start'], segment['end']), chapter))
-                    break  # Stop after the first occurrence
-
-        return matched_chapters
+        # Detecting and preparing chapter titles using OpenAI
+        self._db_chapter_titles = self.openai_api.get_chapters(self._db_script)
+        self.logger(f"Detected chapter titles: {self._db_chapter_titles}")
 
     def _editAndRenderShort(self):
         self.verifyParameters(
             voiceover_audio_url=self._db_audio_path)
 
-        self._identifyChapters()  # Identify chapters before editing
-
-        outputPath = self.dynamicAssetDir + "rendered_video.mp4"
+        outputPath = self.dynamicAssetDir+"rendered_video.mp4"
         if not (os.path.exists(outputPath)):
             self.logger("Rendering short: Starting automated editing...")
             videoEditor = EditingEngine()
-            videoEditor.addEditingStep(EditingStep.ADD_VOICEOVER_AUDIO, {'url': self._db_audio_path})
-            if self._db_background_music_url:
-                videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_MUSIC, {
-                    'url': self._db_background_music_url,
-                    'loop_background_music': self._db_voiceover_duration,
-                    "volume_percentage": 0.08
-                })
+            videoEditor.addEditingStep(EditingStep.ADD_VOICEOVER_AUDIO, {
+                                       'url': self._db_audio_path})
+            if (self._db_background_music_url):
+                videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_MUSIC, {'url': self._db_background_music_url,
+                                                                              'loop_background_music': self._db_voiceover_duration,
+                                                                              "volume_percentage": 0.08})
             for (t1, t2), video_url in self._db_timed_video_urls:
-                videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_VIDEO, {
-                    'url': video_url,
-                    'set_time_start': t1,
-                    'set_time_end': t2
-                })
+                videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_VIDEO, {'url': video_url,
+                                                                              'set_time_start': t1,
+                                                                              'set_time_end': t2})
+            if (self._db_format_vertical):
+                caption_type = EditingStep.ADD_CAPTION_SHORT_ARABIC if self._db_language == Language.ARABIC.value else EditingStep.ADD_CAPTION_SHORT
+            else:
+                caption_type = EditingStep.ADD_CAPTION_LANDSCAPE_ARABIC if self._db_language == Language.ARABIC.value else EditingStep.ADD_CAPTION_LANDSCAPE
 
-            # Add chapters as titles to the top middle of the video
-            for (t1, t2), chapter in self._db_chapter_titles:
-                videoEditor.addEditingStep(EditingStep.ADD_TITLE, {
-                    'text': chapter,
-                    'set_time_start': t1,
-                    'set_time_end': t2,
-                    'position': 'top-center',
-                    'font_size': 48,
-                    'font_color': 'white',
-                    'background_color': 'black'
-                })
+            for (t1, t2), text in self._db_timed_captions:
+                videoEditor.addEditingStep(caption_type, {'text': text.upper(),
+                                                          'set_time_start': t1,
+                                                          'set_time_end': t2})
+
+            # Adding chapter titles
+            if self._db_chapter_titles:
+                for (timestamp, title) in self._db_chapter_titles:
+                    videoEditor.addEditingStep(caption_type, {'text': title.upper(),
+                                                              'set_time_start': timestamp,
+                                                              'set_time_end': timestamp + 2})  # Display chapter title for 2 seconds
 
             self.logger("Rendering video...")
             videoEditor.renderVideo(outputPath, logger=self.logger if self.logger is not self.default_logger else None)
@@ -205,4 +172,3 @@ class ContentVideoEngine(AbstractContentEngine):
         self._db_video_path = newFileName+".mp4"
         self._db_ready_to_upload = True
         self.logger(f"Video rendered and metadata saved at {newFileName}.mp4")
-
