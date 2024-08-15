@@ -2,8 +2,9 @@ import datetime
 import os
 import re
 import shutil
+import cv2
 import logging
-from typing import Generator, Tuple, Any
+from typing import Generator, Tuple, Any, Optional
 
 from shortGPT.api_utils.pexels_api import getBestVideo
 from shortGPT.audio import audio_utils
@@ -19,7 +20,7 @@ from shortGPT.gpt import gpt_editing, gpt_translate, gpt_yt
 class ContentVideoEngine(AbstractContentEngine):
 
     def __init__(self, voiceModule: VoiceModule, script: str, background_music_name: str = "", id: str = "",
-                 watermark: str = None, isVerticalFormat: bool = False, language: Language = Language.ENGLISH):
+                 watermark: Optional[str] = None, isVerticalFormat: bool = False, language: Language = Language.ENGLISH):
         super().__init__(id, "general_video", language, voiceModule)
         if not id:
             if watermark:
@@ -114,6 +115,9 @@ class ContentVideoEngine(AbstractContentEngine):
                         result = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
                         if result and len(result) == 2:
                             url, video_duration = result
+                            if video_duration is None:
+                                logging.warning(f"Received None duration for video: {url}. Skipping this video.")
+                                continue
                             video_start_time = current_time
                             video_end_time = video_start_time + video_duration
                             used_links.append(url.split('.hd')[0])
