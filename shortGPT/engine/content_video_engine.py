@@ -87,24 +87,29 @@ class ContentVideoEngine(AbstractContentEngine):
         used_links = []
         current_time = 0  # Track the cumulative time to set proper start times
 
-        for query in self._db_timed_video_searches[0][1]:  # Only use the predefined search terms
-            result = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
-            
-            if isinstance(result, tuple) and len(result) == 2:
-                url, video_duration = result
-            elif isinstance(result, str):  # If only URL is returned
-                url = result
-                video_duration = self.get_video_duration_from_url(url)
-            else:
-                logging.error(f"Unexpected result format from getBestVideo: {result}")
-                continue
+        while current_time < self._db_voiceover_duration:
+            for query in self._db_timed_video_searches[0][1]:
+                result = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
+                
+                if isinstance(result, tuple) and len(result) == 2:
+                    url, video_duration = result
+                elif isinstance(result, str):  # If only URL is returned
+                    url = result
+                    video_duration = self.get_video_duration_from_url(url)
+                else:
+                    logging.error(f"Unexpected result format from getBestVideo: {result}")
+                    continue
 
-            if url:
-                video_start_time = current_time  # Start at the current cumulative time
-                video_end_time = video_start_time + video_duration  # Calculate the end time
-                used_links.append(url.split('.hd')[0])
-                timed_video_urls.append([[video_start_time, video_end_time], url])
-                current_time = video_end_time  # Update current time to the end of this video
+                if url:
+                    video_start_time = current_time  # Start at the current cumulative time
+                    video_end_time = video_start_time + video_duration  # Calculate the end time
+                    used_links.append(url.split('.hd')[0])
+                    timed_video_urls.append([[video_start_time, video_end_time], url])
+                    logging.info(f"Added video from {video_start_time} to {video_end_time} using URL {url}")
+                    current_time = video_end_time  # Update current time to the end of this video
+
+                    if current_time >= self._db_voiceover_duration:
+                        break
 
         self._db_timed_video_urls = timed_video_urls
         logging.info(f"Generated video URLs: {self._db_timed_video_urls}")
@@ -169,6 +174,7 @@ class ContentVideoEngine(AbstractContentEngine):
                 videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_VIDEO, {'url': video_url,
                                                                               'set_time_start': t1,
                                                                               'set_time_end': t2})
+                logging.info(f"Added video {video_url} from {t1} to {t2}")
             if (self._db_format_vertical):
                 caption_type = EditingStep.ADD_CAPTION_SHORT_ARABIC if self._db_language == Language.ARABIC.value else EditingStep.ADD_CAPTION_SHORT
             else:
