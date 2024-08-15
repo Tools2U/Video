@@ -2,8 +2,8 @@ import datetime
 import os
 import re
 import shutil
-import cv2
 import logging
+from typing import Generator, Tuple, Any
 
 from shortGPT.api_utils.pexels_api import getBestVideo
 from shortGPT.audio import audio_utils
@@ -16,11 +16,10 @@ from shortGPT.editing_utils import captions
 from shortGPT.engine.abstract_content_engine import AbstractContentEngine
 from shortGPT.gpt import gpt_editing, gpt_translate, gpt_yt
 
-
 class ContentVideoEngine(AbstractContentEngine):
 
-    def __init__(self, voiceModule: VoiceModule, script: str, background_music_name="", id="",
-                 watermark=None, isVerticalFormat=False, language: Language = Language.ENGLISH):
+    def __init__(self, voiceModule: VoiceModule, script: str, background_music_name: str = "", id: str = "",
+                 watermark: str = None, isVerticalFormat: bool = False, language: Language = Language.ENGLISH):
         super().__init__(id, "general_video", language, voiceModule)
         if not id:
             if watermark:
@@ -34,14 +33,27 @@ class ContentVideoEngine(AbstractContentEngine):
             1: self._generateTempAudio,
             2: self._speedUpAudio,
             3: self._timeCaptions,
-            4: self._generateVideoSearchTerms,
-            5: self._generateVideoUrls,
-            6: self._chooseBackgroundMusic,
-            7: self._prepareBackgroundAssets,
+            4: self._prepareBackgroundAssets,  # Moved this step earlier
+            5: self._generateVideoSearchTerms,
+            6: self._generateVideoUrls,
+            7: self._chooseBackgroundMusic,
             8: self._prepareCustomAssets,
             9: self._editAndRenderShort,
             10: self._addMetadata
         }
+
+    def makeContent(self) -> Generator[Tuple[int, str], Any, None]:
+        currentStep = 1
+        while currentStep <= len(self.stepDict):
+            stepInfo = f"Step {currentStep}/{len(self.stepDict)}"
+            try:
+                self.stepDict[currentStep]()
+                yield currentStep, f"{stepInfo} completed successfully"
+                currentStep += 1
+            except Exception as e:
+                logging.error(f"Error in {stepInfo}: {str(e)}")
+                yield currentStep, f"Error in {stepInfo}: {str(e)}"
+                break
 
     def _generateTempAudio(self):
         if not self._db_script:
@@ -65,11 +77,16 @@ class ContentVideoEngine(AbstractContentEngine):
     def _timeCaptions(self):
         self.verifyParameters(audioPath=self._db_audio_path)
         whisper_analysis = audio_utils.audioToText(self._db_audio_path)
-        max_len = 15
-        if not self._db_format_vertical:
-            max_len = 30
+        max_len = 15 if self._db_format_vertical else 30
         self._db_timed_captions = captions.getCaptionsWithTime(
             whisper_analysis, maxCaptionSize=max_len)
+
+    def _prepareBackgroundAssets(self):
+        self.verifyParameters(voiceover_audio_url=self._db_audio_path)
+        if not hasattr(self, '_db_voiceover_duration'):
+            self.logger("Rendering short: (1/4) preparing voice asset...")
+            self._db_audio_path, self._db_voiceover_duration = get_asset_duration(
+                self._db_audio_path, isVideo=False)
 
     def _generateVideoSearchTerms(self):
         self.verifyParameters(captionsTimed=self._db_timed_captions)
@@ -78,13 +95,13 @@ class ContentVideoEngine(AbstractContentEngine):
         ]
 
     def _generateVideoUrls(self):
+        if not hasattr(self, '_db_voiceover_duration'):
+            raise ValueError("Voiceover duration is not set. Ensure that _prepareBackgroundAssets is called before _generateVideoUrls.")
+
         timed_video_urls = []
         used_links = []
         current_time = 0
         max_attempts = 10
-
-        if not hasattr(self, '_db_voiceover_duration'):
-            raise ValueError("Voiceover duration is not set. Ensure that _prepareBackgroundAssets is called before _generateVideoUrls.")
 
         logging.info(f"Starting video URL generation. Voiceover duration: {self._db_voiceover_duration}s")
 
@@ -129,44 +146,43 @@ class ContentVideoEngine(AbstractContentEngine):
         if self._db_background_music_name:
             self._db_background_music_url = AssetDatabase.get_asset_link(self._db_background_music_name)
 
-    def _prepareBackgroundAssets(self):
-        self.verifyParameters(voiceover_audio_url=self._db_audio_path)
-        if not self._db_voiceover_duration:
-            self.logger("Rendering short: (1/4) preparing voice asset...")
-            self._db_audio_path, self._db_voiceover_duration = get_asset_duration(
-                self._db_audio_path, isVideo=False)
-
     def _prepareCustomAssets(self):
         self.logger("Rendering short: (3/4) preparing custom assets...")
         pass
 
     def _editAndRenderShort(self):
-        self.verifyParameters(
-            voiceover_audio_url=self._db_audio_path)
+        self.verifyParameters(voiceover_audio_url=self._db_audio_path)
 
-        outputPath = self.dynamicAssetDir+"rendered_video.mp4"
-        if not (os.path.exists(outputPath)):
+        outputPath = self.dynamicAssetDir + "rendered_video.mp4"
+        if not os.path.exists(outputPath):
             self.logger("Rendering short: Starting automated editing...")
             videoEditor = EditingEngine()
-            videoEditor.addEditingStep(EditingStep.ADD_VOICEOVER_AUDIO, {
-                                       'url': self._db_audio_path})
-            if (self._db_background_music_url):
-                videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_MUSIC, {'url': self._db_background_music_url,
-                                                                              'loop_background_music': self._db_voiceover_duration,
-                                                                              "volume_percentage": 0.08})
+            videoEditor.addEditingStep(EditingStep.ADD_VOICEOVER_AUDIO, {'url': self._db_audio_path})
+            
+            if self._db_background_music_url:
+                videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_MUSIC, {
+                    'url': self._db_background_music_url,
+                    'loop_background_music': self._db_voiceover_duration,
+                    "volume_percentage": 0.08
+                })
+            
             for (t1, t2), video_url in self._db_timed_video_urls:
-                videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_VIDEO, {'url': video_url,
-                                                                              'set_time_start': t1,
-                                                                              'set_time_end': t2})
-            if (self._db_format_vertical):
-                caption_type = EditingStep.ADD_CAPTION_SHORT_ARABIC if self._db_language == Language.ARABIC.value else EditingStep.ADD_CAPTION_SHORT
-            else:
+                videoEditor.addEditingStep(EditingStep.ADD_BACKGROUND_VIDEO, {
+                    'url': video_url,
+                    'set_time_start': t1,
+                    'set_time_end': t2
+                })
+            
+            caption_type = EditingStep.ADD_CAPTION_SHORT_ARABIC if self._db_language == Language.ARABIC.value else EditingStep.ADD_CAPTION_SHORT
+            if not self._db_format_vertical:
                 caption_type = EditingStep.ADD_CAPTION_LANDSCAPE_ARABIC if self._db_language == Language.ARABIC.value else EditingStep.ADD_CAPTION_LANDSCAPE
 
             for (t1, t2), text in self._db_timed_captions:
-                videoEditor.addEditingStep(caption_type, {'text': text.upper(),
-                                                          'set_time_start': t1,
-                                                          'set_time_end': t2})
+                videoEditor.addEditingStep(caption_type, {
+                    'text': text.upper(),
+                    'set_time_start': t1,
+                    'set_time_end': t2
+                })
 
             self.logger("Rendering video...")
             videoEditor.renderVideo(outputPath, logger=self.logger if self.logger is not self.default_logger else None)
@@ -181,13 +197,11 @@ class ContentVideoEngine(AbstractContentEngine):
 
         now = datetime.datetime.now()
         date_str = now.strftime("%Y-%m-%d_%H-%M-%S")
-        newFileName = f"videos/{date_str} - " + \
-            re.sub(r"[^a-zA-Z0-9 '\n\.]", '', self._db_yt_title)
+        newFileName = f"videos/{date_str} - " + re.sub(r"[^a-zA-Z0-9 '\n\.]", '', self._db_yt_title)
 
-        shutil.move(self._db_video_path, newFileName+".mp4")
-        with open(newFileName+".txt", "w", encoding="utf-8") as f:
-            f.write(
-                f"---Youtube title---\n{self._db_yt_title}\n---Youtube description---\n{self._db_yt_description}")
-        self._db_video_path = newFileName+".mp4"
+        shutil.move(self._db_video_path, newFileName + ".mp4")
+        with open(newFileName + ".txt", "w", encoding="utf-8") as f:
+            f.write(f"---Youtube title---\n{self._db_yt_title}\n---Youtube description---\n{self._db_yt_description}")
+        self._db_video_path = newFileName + ".mp4"
         self._db_ready_to_upload = True
         self.logger(f"Video rendered and metadata saved at {newFileName}.mp4")
