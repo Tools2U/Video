@@ -17,6 +17,53 @@ from shortGPT.config.languages import (EDGE_TTS_VOICENAME_MAPPING,
                                        Language)
 from shortGPT.engine.facts_short_engine import FactsShortEngine
 from shortGPT.engine.reddit_short_engine import RedditShortEngine
+import moviepy.editor as mp
+from moviepy.video.io.VideoFileClip import VideoFileClip
+import ffmpeg
+
+
+class CoreEditingEngine:
+    def generate_video(self, schema, outputPath, logger=None):
+        """
+        Generates a video based on the provided schema.
+        
+        Parameters:
+        - schema: A dictionary or structure that defines the video composition.
+        - outputPath: The path where the final video should be saved.
+        - logger: Optional logger for progress reporting.
+        """
+        try:
+            # Example: Iterate over video assets in the schema and process them
+            for asset in schema['video_assets']:
+                try:
+                    clip = self.process_video_asset(asset)
+                    # Further processing and composition
+                except Exception as e:
+                    print(f"Error processing video asset {asset['filename']}: {e}")
+                    # You can log this error or skip to the next asset
+
+            # Save the final video composition to outputPath
+            final_video.write_videofile(outputPath, codec='libx264')
+        except Exception as e:
+            print(f"Error generating video: {e}")
+            # Handle or raise the error as needed
+
+    def process_video_asset(self, asset):
+        """
+        Processes a video asset and returns a video clip.
+        
+        Parameters:
+        - asset: A dictionary containing asset parameters.
+        
+        Returns:
+        - clip: A processed VideoFileClip object.
+        """
+        try:
+            clip = VideoFileClip(**asset)
+            return clip
+        except Exception as e:
+            print(f"Error in process_video_asset with file {asset['filename']}: {e}")
+            raise
 
 
 class ShortAutomationUI(AbstractComponentUI):
@@ -173,3 +220,4 @@ class ShortAutomationUI(AbstractComponentUI):
                 facts_subject = short_type
             return FactsShortEngine(voice_module, facts_type=facts_subject, background_video_name=background_video, background_music_name=background_music, num_images=50, watermark=watermark, language=language)
         raise gr.Error(f"Short type does not have a valid short engine: {short_type}")
+
