@@ -13,7 +13,8 @@ from shortGPT.editing_framework.editing_engine import (EditingEngine, EditingSte
 from shortGPT.editing_utils import captions
 from shortGPT.engine.abstract_content_engine import AbstractContentEngine
 from shortGPT.gpt import gpt_editing, gpt_translate, gpt_yt
-from shortGPT.api_utils.openai_api import OpenAIAPI  # Import the OpenAI API class
+from shortGPT.api_utils.openai_api import OpenAIAPI  # Ensure OpenAIAPI is imported
+
 
 class ContentVideoEngine(AbstractContentEngine):
 
