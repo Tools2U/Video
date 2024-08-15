@@ -80,41 +80,39 @@ class ContentVideoEngine(AbstractContentEngine):
     def _generateVideoUrls(self):
         timed_video_urls = []
         used_links = []
-        current_time = 0  # Track the cumulative time to set proper start times
+        current_time = 0
         max_attempts = 10
 
-        if not self._db_voiceover_duration:
+        if not hasattr(self, '_db_voiceover_duration'):
             raise ValueError("Voiceover duration is not set. Ensure that _prepareBackgroundAssets is called before _generateVideoUrls.")
 
         logging.info(f"Starting video URL generation. Voiceover duration: {self._db_voiceover_duration}s")
 
         try:
-            while current_time < self._db_voiceover_duration:  # Loop until the total duration covers the voiceover duration
+            while current_time < self._db_voiceover_duration:
                 logging.info(f"Current accumulated video time: {current_time}s. Looking for more clips.")
-                for query in self._db_timed_video_searches[0][1]:  # Only use the predefined search terms
-                    attempt = 0
-                    while attempt < max_attempts:
+                for query in self._db_timed_video_searches[0][1]:
+                    for attempt in range(max_attempts):
                         logging.info(f"Attempting to fetch video for query: {query}. Attempt {attempt + 1}/{max_attempts}.")
                         result = getBestVideo(query, orientation_landscape=not self._db_format_vertical, used_vids=used_links)
                         if result and len(result) == 2:
                             url, video_duration = result
-                            video_start_time = current_time  # Start at the current cumulative time
-                            video_end_time = video_start_time + video_duration  # Calculate the end time
+                            video_start_time = current_time
+                            video_end_time = video_start_time + video_duration
                             used_links.append(url.split('.hd')[0])
                             timed_video_urls.append([[video_start_time, video_end_time], url])
-                            current_time = video_end_time  # Update current time to the end of this video
+                            current_time = video_end_time
                             logging.info(f"Added video: {url} from {video_start_time}s to {video_end_time}s.")
                             break
-                        else:
-                            attempt += 1
-                            logging.warning(f"Attempt {attempt}/{max_attempts} failed to get video. Retrying...")
+                    else:
+                        logging.error(f"Max attempts reached. Could not find video for query: {query}")
+                        continue
 
-                    if attempt >= max_attempts:
-                        logging.error("Max attempts reached. Could not find enough video clips.")
+                    if current_time >= self._db_voiceover_duration:
+                        logging.info(f"Successfully gathered video clips for the entire duration: {self._db_voiceover_duration}s.")
                         break
-
-                if current_time >= self._db_voiceover_duration:
-                    logging.info(f"Successfully gathered video clips for the entire duration: {self._db_voiceover_duration}s.")
+                else:
+                    logging.warning("Exhausted all queries without covering the full duration.")
                     break
 
             if current_time < self._db_voiceover_duration:
