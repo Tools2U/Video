@@ -78,7 +78,7 @@ class ContentVideoEngine(AbstractContentEngine):
         logging.info("Step 4 _generateVideoSearchTerms")
         self.verifyParameters(captionsTimed=self._db_timed_captions)
         self._db_timed_video_searches = [
-            [[0, 9999], ["drone", "military drone", "war"]]
+            [[0, 9999], ["Crypto", "Cryptocurrency", "finance"]]
         ]
 
     def _generateVideoUrls(self):
